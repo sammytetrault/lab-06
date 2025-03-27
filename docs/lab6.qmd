@@ -1,0 +1,11 @@
+---
+title: 'Lab 6: Machine Learning in Hydrology'
+output: html
+author: "Sammy Tetrault"
+format:
+   html:
+    code-fold: true
+    toc: true
+    self-contained: true
+subtitle: ''
+---
