@@ -1,0 +1,40 @@
+---
+title: 'Lab 6: Machine Learning in Hydrology'
+output: html
+author: "Sammy Tetrault"
+format:
+   html:
+    code-fold: true
+    toc: true
+    self-contained: true
+subtitle: ''
+---
+
+### Lab Set Up
+
+```{r}
+##opening libraries 
+library(tidyverse)
+library(tidymodels)
+library(powerjoin)
+library(glue)
+library(vip)
+library(baguette)
+```
+
+### Data Download
+
+```{r}
+root  <- 'https://gdex.ucar.edu/dataset/camels/file'
+```
+
+### Getting the documentation PDF
+
+```{r}
+download.file('https://gdex.ucar.edu/dataset/camels/file/camels_attributes_v2.0.pdf', 'data/camels_attributes_v2.0.pdf')
+```
+
+### Getting Basin characteristics
+
+```{r}
+```

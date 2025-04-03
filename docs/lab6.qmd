@@ -7,5 +7,63 @@ format:
     code-fold: true
     toc: true
     self-contained: true
-subtitle: ''
 ---
+
+### Lab Set Up
+
+```{r}
+##opening libraries 
+library(tidyverse)
+library(tidymodels)
+library(powerjoin)
+library(glue)
+library(vip)
+library(baguette)
+library(purrr)
+```
+
+### Data Download
+
+```{r}
+root  <- 'https://gdex.ucar.edu/dataset/camels/file'
+```
+
+### Getting the documentation PDF
+
+```{r}
+download.file('https://gdex.ucar.edu/dataset/camels/file/camels_attributes_v2.0.pdf','C:/Users/sammy/OneDrive/Desktop/ESS330/Lab6/data/camels_attributes_v2.0.pdf' )
+```
+
+### Getting Basin characteristics
+
+```{r}
+types <- c("clim", "geol", "soil", "topo", "vege", "hydro")
+
+remote_files <- glue('{root}/camels_{types}.txt')
+
+local_files <- glue('C:/Users/sammy/OneDrive/Desktop/ESS330/Lab6/data/camels_{types}.txt')
+
+walk2(remote_files, local_files, download.file, quiet = TRUE)
+
+# Read and merge data
+camels <- map(local_files, read_delim, show_col_types = FALSE) 
+
+types <- c("clim", "geol", "soil", "topo", "vege", "hydro")
+
+# Where the files live online ...
+remote_files  <- glue('{root}/camels_{types}.txt')
+
+# where we want to download the data ...
+local_files   <- glue('C:/Users/sammy/OneDrive/Desktop/ESS330/Lab6/data/camels_{types}.txt')
+
+walk2(remote_files, local_files, download.file, quiet = TRUE)
+
+# Read and merge data
+camels <- map(local_files, read_delim, show_col_types = FALSE) 
+
+camels <- power_full_join(camels ,by = 'gauge_id')
+```
+
+#### Question 1
+
+According to the camels documentation PDF, zero_q_freq represents frequency of days with Q = 0 mm/day. Q seems to represent flow, as other attributes in the same category reference frequency of certain flow volumes.
