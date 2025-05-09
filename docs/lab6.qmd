@@ -20,6 +20,9 @@ library(glue)
 library(vip)
 library(baguette)
 library(purrr)
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
 ```
 
 ### Data Download
@@ -64,6 +67,396 @@ camels <- map(local_files, read_delim, show_col_types = FALSE)
 camels <- power_full_join(camels ,by = 'gauge_id')
 ```
 
-#### Question 1
+##### Question 1
 
 According to the camels documentation PDF, zero_q_freq represents frequency of days with Q = 0 mm/day. Q seems to represent flow, as other attributes in the same category reference frequency of certain flow volumes.
+
+### Exploratory Data Analysis
+
+```{r}
+ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +
+  borders("state", colour = "gray50") +
+  geom_point(aes(color = q_mean)) +
+  scale_color_gradient(low = "pink", high = "dodgerblue") +
+  ggthemes::theme_map()
+```
+
+##### Question 2
+
+```{r}
+#aridity plot
+aridity_plot <- ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +
+  borders("state", colour = "gray50") +
+  geom_point(aes(color = aridity)) +
+#just did a quick google search of hex values to find the colors I wanted!
+  scale_color_gradient(low = "#FFFF60", high = "#B22220") +
+   labs(title = "US Catchment Aridity", colors = "aridity") +
+  ggthemes::theme_map()
+
+#p_mean plot
+p_mean_plot <- ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +
+  borders("state", colour = "gray50") +
+  geom_point(aes(color = p_mean)) +
+  scale_color_gradient(low = "#90E0EF", high = "#023E8A") +
+  labs(title = "US Catchment Mean Daily Precipitation",
+       color = "precip") +
+  ggthemes::theme_map()
+
+#formatting
+ggarrange(aridity_plot, p_mean_plot, ncol = 2, nrow = 1)
+```
+
+### Model Preparation
+
+```{r}
+camels |> 
+  select(aridity, p_mean, q_mean) |> 
+  drop_na() |> 
+  cor()
+```
+
+### Visual EDA
+
+```{r}
+# Create a scatter plot of aridity vs rainfall
+ggplot(camels, aes(x = aridity, y = p_mean)) +
+  # Add points colored by mean flow
+  geom_point(aes(color = q_mean)) +
+  # Add a linear regression line
+  geom_smooth(method = "lm", color = "red", linetype = 2) +
+  # Apply the viridis color scale
+  scale_color_viridis_c() +
+  # Add a title, axis labels, and theme (w/ legend on the bottom)
+  theme_linedraw() + 
+  theme(legend.position = "bottom") + 
+  labs(title = "Aridity vs Rainfall vs Runnoff", 
+       x = "Aridity", 
+       y = "Rainfall",
+       color = "Mean Flow")
+```
+
+```{r}
+ggplot(camels, aes(x = aridity, y = p_mean)) +
+  geom_point(aes(color = q_mean)) +
+  geom_smooth(method = "lm") +
+  scale_color_viridis_c() +
+  # Apply log transformations to the x and y axes
+  scale_x_log10() + 
+  scale_y_log10() +
+  theme_linedraw() +
+  theme(legend.position = "bottom") + 
+  labs(title = "Aridity vs Rainfall vs Runnoff", 
+       x = "Aridity", 
+       y = "Rainfall",
+       color = "Mean Flow")
+```
+
+```{r}
+ggplot(camels, aes(x = aridity, y = p_mean)) +
+  geom_point(aes(color = q_mean)) +
+  geom_smooth(method = "lm") +
+  # Apply a log transformation to the color scale
+  scale_color_viridis_c(trans = "log") +
+  scale_x_log10() + 
+  scale_y_log10() +
+  theme_linedraw() +
+  theme(legend.position = "bottom",
+        # Expand the legend width ...
+        legend.key.width = unit(2.5, "cm"),
+        legend.key.height = unit(.5, "cm")) + 
+  labs(title = "Aridity vs Rainfall vs Runnoff", 
+       x = "Aridity", 
+       y = "Rainfall",
+       color = "Mean Flow") 
+```
+
+### Model Building
+
+```{r}
+set.seed(123)
+# Bad form to perform simple     transformations on the outcome variable within a 
+# recipe. So, we'll do it here.
+camels <- camels |> 
+  mutate(logQmean = log(q_mean))
+
+# Generate the split
+camels_split <- initial_split(camels, prop = 0.8)
+camels_train <- training(camels_split)
+camels_test  <- testing(camels_split)
+
+camels_cv <- vfold_cv(camels_train, v = 10)
+```
+
+```{r}
+# Create a recipe to preprocess the data
+rec <-  recipe(logQmean ~ aridity + p_mean, data = camels_train) %>%
+  # Log transform the predictor variables (aridity and p_mean)
+  step_log(all_predictors()) %>%
+  # Add an interaction term between aridity and p_mean
+  step_interact(terms = ~ aridity:p_mean) |> 
+  # Drop any rows with missing values in the pred
+  step_naomit(all_predictors(), all_outcomes())
+```
+
+```{r}
+# Prepare the data
+baked_data <- prep(rec, camels_train) |> 
+  bake(new_data = NULL)
+
+# Interaction with lm
+#  Base lm sets interaction terms with the * symbol
+lm_base <- lm(logQmean ~ aridity * p_mean, data = baked_data)
+summary(lm_base)
+```
+
+```{r}
+# Sanity Interaction term from recipe ... these should be equal!!
+summary(lm(logQmean ~ aridity + p_mean + aridity_x_p_mean, data = baked_data))
+```
+
+```{r}
+test_data <-  bake(prep(rec), new_data = camels_test)
+test_data$lm_pred <- predict(lm_base, newdata = test_data)
+```
+
+### Model Evaluation: statistical and visual
+
+```{r}
+metrics(test_data, truth = logQmean, estimate = lm_pred)
+```
+
+```{r}
+ggplot(test_data, aes(x = logQmean, y = lm_pred, colour = aridity)) +
+  # Apply a gradient color scale
+  scale_color_gradient2(low = "brown", mid = "orange", high = "darkgreen") +
+  geom_point() +
+  geom_abline(linetype = 2) +
+  theme_linedraw() + 
+  labs(title = "Linear Model: Observed vs Predicted",
+       x = "Observed Log Mean Flow",
+       y = "Predicted Log Mean Flow",
+       color = "Aridity")
+```
+
+### Using a workflow instead
+
+```{r}
+# Define model
+lm_model <- linear_reg() %>%
+  # define the engine
+  set_engine("lm") %>%
+  # define the mode
+  set_mode("regression")
+
+# Instantiate a workflow ...
+lm_wf <- workflow() %>%
+  # Add the recipe
+  add_recipe(rec) %>%
+  # Add the model
+  add_model(lm_model) %>%
+  # Fit the model to the training data
+  fit(data = camels_train) 
+
+# Extract the model coefficients from the workflow
+summary(extract_fit_engine(lm_wf))$coefficients
+```
+
+```{r}
+# From the base implementation
+summary(lm_base)$coefficients
+```
+
+```{r}
+#
+lm_data <- augment(lm_wf, new_data = camels_test)
+dim(lm_data)
+```
+
+```{r}
+metrics(lm_data, truth = logQmean, estimate = .pred)
+```
+
+```{r}
+ggplot(lm_data, aes(x = logQmean, y = .pred, colour = aridity)) +
+  scale_color_viridis_c() +
+  geom_point() +
+  geom_abline() +
+  theme_linedraw()
+```
+
+### Switch it up!
+
+```{r}
+library(baguette)
+rf_model <- rand_forest() %>%
+  set_engine("ranger", importance = "impurity") %>%
+  set_mode("regression")
+
+rf_wf <- workflow() %>%
+  # Add the recipe
+  add_recipe(rec) %>%
+  # Add the model
+  add_model(rf_model) %>%
+  # Fit the model
+  fit(data = camels_train) 
+```
+
+```{r}
+# make predictions
+rf_data <- augment(rf_wf, new_data = camels_test)
+dim(rf_data)
+```
+
+```{r}
+# statistical evaluation
+metrics(rf_data, truth = logQmean, estimate = .pred)
+```
+
+```{r}
+# visual evaluation
+ggplot(rf_data, aes(x = logQmean, y = .pred, colour = aridity)) +
+  scale_color_viridis_c() +
+  geom_point() +
+  geom_abline() +
+  theme_linedraw()
+```
+
+### A workflowset approach
+
+```{r}
+wf <- workflow_set(list(rec), list(lm_model, rf_model)) %>%
+  workflow_map('fit_resamples', resamples = camels_cv) 
+
+autoplot(wf)
+```
+
+```{r}
+rank_results(wf, rank_metric = "rsq", select_best = TRUE)
+```
+
+### Question 3: Your Turn!
+
+```{r}
+boost_model <- 
+  boost_tree() %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+  
+nnet_model <-
+  bag_mlp() %>%
+  set_engine("nnet") %>%
+  set_mode("regression")
+
+wf <- workflow_set(list(rec), list(lm_model, rf_model, boost_model, nnet_model)) %>%
+  workflow_map('fit_resamples', resamples = camels_cv) 
+
+rank_results(wf, rank_metric = "rsq", select_best = TRUE)
+```
+
+Of all the models, looking at both RMSE and R\^2, the neural network model performs the best. This means the model's predicted values are the closest to the actual values on average out of all models, thus I would move forward with this model.
+
+## Build Your Own
+
+#### Data Splitting
+
+```{r}
+set.seed("82304")
+
+camels_split <- initial_split(camels, prop = 0.75)
+
+camels_train <- training(camels_split)
+
+camels_test <- testing(camels_split)
+
+camels_resample <- vfold_cv(camels_train, v = 10)
+```
+
+#### Recipe
+
+The formula I chose was logQmean \~ high_prec_freq + soil_porosity. I chose this formula because q_mean is looking at mean discharge. High precipitation frequency might be able to predict mean discharge as more frequent high precipitation events may increase the mean discharge. I chose to also look at soil porosity since this effects runoff. Low soil porosity and frequent high precipitation days may indicate high runoff which would likely increase mean discharge.
+
+```{r}
+# First I want to check the relationship between high_q_freq, baseflow_index, and q_mean
+
+ggplot(camels, aes(x = high_prec_freq, y = soil_porosity)) +
+  # Add points colored by mean flow
+  geom_point(aes(color = logQmean)) +
+  # Add a linear regression line
+  geom_smooth(method = "lm", color = "red", linetype = 2) +
+  # Apply the viridis color scale
+  scale_color_viridis_c() +
+  # Add a title, axis labels, and theme (w/ legend on the bottom)
+  theme_linedraw() + 
+  theme(legend.position = "bottom") + 
+  labs(title = "High Precipitation Frequency vs Soil Porosity vs Log Mean Discharge", 
+       x = "High Precipitation Frequency", 
+       y = "Soil Porosity",
+       color = "Log Mean Discharge")
+```
+
+```{r}
+# from the ggplot, there doesn't seem to be a strong linear relationship between 
+new_recipe <- recipe(logQmean ~ high_prec_freq + soil_porosity, data = camels_train) %>%
+  # add interaction btwn high prec freq and soil porosity
+  step_interact(terms = ~ high_prec_freq:soil_porosity) %>%
+  # drop nas
+  step_naomit(all_predictors(), all_outcomes())
+```
+
+### Define 3 Models
+
+```{r}
+new_rand_forest <- rand_forest()%>%
+  set_engine("ranger")%>%
+  set_mode("regression")
+
+new_boost_model <- 
+  boost_tree() %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+  
+new_nnet_model <-
+  bag_mlp() %>%
+  set_engine("nnet") %>%
+  set_mode("regression")
+```
+
+### Workflow set()
+
+```{r}
+new_wf <- workflow_set(list(new_recipe), list(new_rand_forest, new_boost_model, new_nnet_model)) %>%
+  workflow_map('fit_resamples', resamples = camels_resample) 
+```
+
+### Evaluation
+
+```{r}
+autoplot(new_wf)
+
+rank_results(new_wf, rank_metric = "rsq", select_best = TRUE)
+```
+
+Of these models, it appears the best fit is the random forest model, as it has the lowest RMSE and highest RSQ. However, it is important to note that all three models have low RSQ values, indicating that the models are unsuccessful (an RSQ of \> 0.9 would indicate a successful model). While the random forest model has a marginally higher RSQ than the other models, it is only 0.45, indicating a poor fit.
+
+### Extract and Evaluate
+
+```{r}
+new_rf_wf <- workflow() %>%
+  # Add the recipe
+  add_recipe(new_recipe) %>%
+  # Add the model
+  add_model(new_rand_forest) %>%
+  # Fit the model
+  fit(data = camels_train) 
+
+rand_forest_data <- augment(new_rf_wf, new_data = camels_test)
+
+compare <- full_join(rand_forest_data, camels, by = "gauge_id") |>
+  mutate(logQmean = log(q_mean.x))
+
+ggplot(compare, aes(x = .pred, y = logQmean)) +
+  geom_point(aes(color = logQmean))+
+  geom_abline(slope = 1, intercept = 0, color = "red")
+```
+
+There seems to be some points clustered around the 1:1 line indicating that there are some accurate predictions from the random forest model of the actual observed values for logQmean. However, points are somewhat scattered suggesting many of the predicted values differ from actual values. The negative values are confusing considering this data is discharge data and we would not expect to see negative discharge unless we were comparing to previous discharge values.
